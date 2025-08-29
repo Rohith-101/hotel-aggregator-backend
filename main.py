@@ -1,4 +1,3 @@
-    # main.py
 import logging
 import os
 import json
@@ -38,8 +37,8 @@ def get_source_from_url(url: str) -> str:
         return "Google Reviews"
     return "Unknown"
 
-def extract_hotel_name_from_url(url: str) -> str:
-    """Extracts a clean hotel name from various URL formats."""
+def extract_query_term_from_url(url: str) -> str:
+    """Extracts a clean hotel name or Place ID from various URL formats."""
     try:
         if "tripadvisor" in url:
             match = re.search(r'-Reviews-(.*?)-', url)
@@ -47,28 +46,29 @@ def extract_hotel_name_from_url(url: str) -> str:
         if "booking.com" in url:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
             if match: return match.group(1).replace('-', ' ')
+        # CORRECTED: Look for the Google Place ID (starts with ChIJ)
         if "google.com" in url:
-             # For Google, we need to find the place ID for a direct lookup
-             match = re.search(r'ChIJ[a-zA-Z0-9_-]+', url)
+             match = re.search(r'(ChIJ[a-zA-Z0-9_-]+)', url)
              if match: return match.group(0)
     except Exception:
         pass
+    # Fallback if no specific pattern is matched
     return "hotel"
 
 def scrape_single_url(url: str, api_key: str):
     """Scrapes a single hotel URL using the Google Maps engine for reliability."""
     source = get_source_from_url(url)
-    query_term = extract_hotel_name_from_url(url)
+    query_term = extract_query_term_from_url(url)
     
     if source == "Unknown" or not query_term:
         logging.warning(f"Could not determine source or query term for URL: {url}")
         return None
 
     try:
-        search_query = f"{query_term} Chennai"
+        # For non-Google sources, we add the city to the name for a better search
+        search_query = f"{query_term} Chennai" if source != "Google Reviews" else query_term
         logging.info(f"Scraping '{search_query}' for source: {source}")
         
-        # --- FINAL SOLUTION: Use the google_maps engine for all searches ---
         params = {
             "api_key": api_key,
             "engine": "google_maps",
@@ -80,13 +80,11 @@ def scrape_single_url(url: str, api_key: str):
         search = GoogleSearch(params)
         results = search.get_dict()
 
-        # --- Standardize data from the google_maps response ---
         place_results = results.get("place_results", {})
         if not place_results:
             logging.warning(f"SerpApi found no place_results for '{search_query}'")
             return None
 
-        # Extract the most recent reviews
         user_reviews = results.get("reviews", [])
         
         return {
@@ -148,4 +146,3 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 @app.get("/")
 def read_root():
     return {"status": "Hotel Review Aggregator is running!"}
-
