@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+gspread
+google-auth-oauthlib
+pydantic
+google-search-results
