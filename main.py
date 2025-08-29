@@ -76,8 +76,11 @@ def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
             logging.warning(f"SerpApi found no place_results for '{search_query}'")
             return {}
 
-        # --- DETAILED DATA EXTRACTION ---
-        user_reviews = results.get("reviews", [])
+        # --- MORE ROBUST DETAILED DATA EXTRACTION ---
+        # Search for reviews and distribution in multiple possible locations in the API response
+        user_reviews = results.get("reviews") or place_results.get("user_reviews", {}).get("reviews") or []
+        rating_distribution = results.get("rating_distribution") or place_results.get("rating_distribution") or {}
+        
         review_snippets = [f'"{r.get("snippet", "")}"' for r in user_reviews[:3]]
         
         return {
@@ -88,7 +91,7 @@ def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
             "address": place_results.get("address", "N/A"),
             "website": place_results.get("website", "N/A"),
             "phone": place_results.get("phone", "N/A"),
-            "distribution": results.get("rating_distribution", {}),
+            "distribution": rating_distribution,
             "reviews_snippets": " | ".join(review_snippets) if review_snippets else "N/A"
         }
     except Exception as e:
@@ -147,5 +150,4 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 @app.get("/")
 def read_root():
     return {"status": "Hotel Review Aggregator is running!"}
-
 
