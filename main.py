@@ -1,4 +1,3 @@
-# main.py
 import logging
 import os
 import json
@@ -9,7 +8,7 @@ from typing import List
 
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pantic import BaseModel
+from pydantic import BaseModel
 from serpapi import GoogleSearch
 from concurrent.futures import ThreadPoolExecutor
 
