@@ -88,7 +88,6 @@ def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
             "address": place_results.get("address", "N/A"),
             "website": place_results.get("website", "N/A"),
             "phone": place_results.get("phone", "N/A"),
-            "distribution": results.get("rating_distribution", {}),
             "reviews_snippets": " | ".join(review_snippets) if review_snippets else "N/A"
         }
     except Exception as e:
@@ -108,13 +107,11 @@ def save_to_sheets(all_reviews_data: List[Dict[str, Any]]):
         
         rows_to_add = []
         for data in all_reviews_data:
-            dist = data.get("distribution", {})
-            rating_dist_str = json.dumps(dist) if dist else "{}"
             rows_to_add.append([
                 data.get("name", "N/A"), data.get("source", "N/A"),
                 data.get("rating", "N/A"), data.get("count", 0),
                 data.get("address", "N/A"), data.get("website", "N/A"),
-                data.get("phone", "N/A"), rating_dist_str,
+                data.get("phone", "N/A"),
                 data.get("reviews_snippets", "N/A"),
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ])
@@ -147,3 +144,4 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 @app.get("/")
 def read_root():
     return {"status": "Hotel Review Aggregator is running!"}
+
