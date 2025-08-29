@@ -4,7 +4,7 @@ import json
 import gspread
 import re
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Any
 
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,12 +29,9 @@ class ScrapeRequest(BaseModel):
 
 def get_source_from_url(url: str) -> str:
     """Identifies the review source from the URL."""
-    if "booking.com" in url:
-        return "Booking.com"
-    if "tripadvisor" in url:
-        return "TripAdvisor"
-    if "google.com/travel/hotels" in url or "google.com/maps" in url:
-        return "Google Reviews"
+    if "booking.com" in url: return "Booking.com"
+    if "tripadvisor" in url: return "TripAdvisor"
+    if "google.com" in url: return "Google Reviews"
     return "Unknown"
 
 def extract_query_term_from_url(url: str) -> str:
@@ -46,35 +43,29 @@ def extract_query_term_from_url(url: str) -> str:
         if "booking.com" in url:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
             if match: return match.group(1).replace('-', ' ')
-        # CORRECTED: Look for the Google Place ID (starts with ChIJ)
         if "google.com" in url:
              match = re.search(r'(ChIJ[a-zA-Z0-9_-]+)', url)
              if match: return match.group(0)
     except Exception:
         pass
-    # Fallback if no specific pattern is matched
     return "hotel"
 
-def scrape_single_url(url: str, api_key: str):
+def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
     """Scrapes a single hotel URL using the Google Maps engine for reliability."""
     source = get_source_from_url(url)
     query_term = extract_query_term_from_url(url)
     
     if source == "Unknown" or not query_term:
         logging.warning(f"Could not determine source or query term for URL: {url}")
-        return None
+        return {}
 
     try:
-        # For non-Google sources, we add the city to the name for a better search
         search_query = f"{query_term} Chennai" if source != "Google Reviews" else query_term
         logging.info(f"Scraping '{search_query}' for source: {source}")
         
         params = {
-            "api_key": api_key,
-            "engine": "google_maps",
-            "q": search_query,
-            "hl": "en",
-            "gl": "in"
+            "api_key": api_key, "engine": "google_maps",
+            "q": search_query, "hl": "en", "gl": "in"
         }
 
         search = GoogleSearch(params)
@@ -83,22 +74,28 @@ def scrape_single_url(url: str, api_key: str):
         place_results = results.get("place_results", {})
         if not place_results:
             logging.warning(f"SerpApi found no place_results for '{search_query}'")
-            return None
+            return {}
 
+        # --- DETAILED DATA EXTRACTION ---
         user_reviews = results.get("reviews", [])
+        review_snippets = [f'"{r.get("snippet", "")}"' for r in user_reviews[:3]]
         
         return {
+            "name": place_results.get("title", "N/A"),
             "source": source,
             "rating": place_results.get("rating"),
             "count": place_results.get("reviews"),
+            "address": place_results.get("address", "N/A"),
+            "website": place_results.get("website", "N/A"),
+            "phone": place_results.get("phone", "N/A"),
             "distribution": results.get("rating_distribution", {}),
-            "reviews": user_reviews[:5]
+            "reviews_snippets": " | ".join(review_snippets) if review_snippets else "N/A"
         }
     except Exception as e:
         logging.error(f"Failed to scrape {url}: {e}", exc_info=True)
-        return None
+        return {}
 
-def save_to_sheets(all_reviews_data: List[dict]):
+def save_to_sheets(all_reviews_data: List[Dict[str, Any]]):
     """Saves the aggregated data to Google Sheets."""
     try:
         SHEET_NAME = os.environ["SHEET_NAME"]
@@ -112,10 +109,14 @@ def save_to_sheets(all_reviews_data: List[dict]):
         rows_to_add = []
         for data in all_reviews_data:
             dist = data.get("distribution", {})
-            rating_dist_str = json.dumps(dist)
+            rating_dist_str = json.dumps(dist) if dist else "{}"
             rows_to_add.append([
-                data.get("source"), data.get("rating"), data.get("count"),
-                rating_dist_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                data.get("name", "N/A"), data.get("source", "N/A"),
+                data.get("rating", "N/A"), data.get("count", 0),
+                data.get("address", "N/A"), data.get("website", "N/A"),
+                data.get("phone", "N/A"), rating_dist_str,
+                data.get("reviews_snippets", "N/A"),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ])
         
         if rows_to_add:
