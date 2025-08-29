@@ -40,25 +40,17 @@ def get_source_from_url(url: str) -> str:
 def extract_hotel_name_from_url(url: str) -> str:
     """Extracts a clean hotel name from various URL formats."""
     try:
-        # For TripAdvisor: Hotel_Review-g304556-d3240217-Reviews-The_Leela_Palace_Chennai-Chennai
         if "tripadvisor" in url:
             match = re.search(r'-Reviews-(.*?)-', url)
-            if match:
-                return match.group(1).replace('_', ' ')
-        # For Booking.com: /hotel/in/the-leela-palace-chennai.html
+            if match: return match.group(1).replace('_', ' ')
         if "booking.com" in url:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
-            if match:
-                return match.group(1).replace('-', ' ')
-        # For Google: .../hotels/entity/ChoQ_4-c8M_E94f8ARoNL2cvMTFjNV9za21qcBAE/reviews
+            if match: return match.group(1).replace('-', ' ')
         if "google.com" in url:
-             # For Google, we can often just use the URL as the query
-             return url
+             return url # For Google, the URL itself is a good query
     except Exception:
         pass
-    # Fallback for any other format
     return "hotel"
-
 
 def scrape_single_url(url: str, api_key: str):
     """Scrapes a single hotel URL using SerpApi."""
@@ -70,11 +62,18 @@ def scrape_single_url(url: str, api_key: str):
         return None
 
     try:
-        logging.info(f"Scraping '{hotel_name}' from {source}")
+        # --- MORE SPECIFIC SEARCH QUERY ---
+        # For non-Google URLs, we make the query more specific to improve matching.
+        search_query = hotel_name
+        if source != "Google Reviews":
+            search_query = f"{hotel_name} Chennai"
+        
+        logging.info(f"Scraping '{search_query}' for source: {source}")
+        
         params = {
             "api_key": api_key,
             "engine": "google_hotels",
-            "q": hotel_name,
+            "q": search_query,
             "hl": "en",
             "gl": "in"
         }
@@ -88,10 +87,10 @@ def scrape_single_url(url: str, api_key: str):
         if source == "Google Reviews":
             reviews_results = results.get("reviews", [])
             if not reviews_results: 
-                logging.warning(f"No Google reviews found for '{hotel_name}'")
+                logging.warning(f"No Google reviews found for '{search_query}'")
                 return None
-            total_reviews = len(reviews_results)
-            avg_rating = round(sum(r.get("rating", 0) for r in reviews_results) / total_reviews, 2) if total_reviews > 0 else 0
+            total_reviews = results.get("place_info", {}).get("reviews", 0)
+            avg_rating = results.get("place_info", {}).get("rating", 0)
             return {
                 "source": source, "rating": avg_rating, "count": total_reviews,
                 "distribution": results.get("rating_distribution", {}),
@@ -100,13 +99,15 @@ def scrape_single_url(url: str, api_key: str):
         else: # For Booking.com, TripAdvisor, etc.
             properties = results.get("properties", [])
             if not properties:
-                logging.warning(f"SerpApi found no properties for '{hotel_name}' from {source}")
+                logging.warning(f"SerpApi found no properties for '{search_query}' from {source}")
                 return None
             hotel = properties[0]
+            # Get recent reviews from the 'user_reviews' section
+            user_reviews = hotel.get("user_reviews", {}).get("reviews", [])
             return {
                 "source": source, "rating": hotel.get("overall_rating"), "count": hotel.get("reviews"),
                 "distribution": hotel.get("rating_distribution", {}),
-                "reviews": hotel.get("reviews_breakdown", {}).get("user_reviews", {}).get("reviews", [])[:5]
+                "reviews": user_reviews[:5]
             }
     except Exception as e:
         logging.error(f"Failed to scrape {url}: {e}")
