@@ -1,3 +1,4 @@
+    # main.py
 import logging
 import os
 import json
@@ -47,70 +48,56 @@ def extract_hotel_name_from_url(url: str) -> str:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
             if match: return match.group(1).replace('-', ' ')
         if "google.com" in url:
-             return url # For Google, the URL itself is a good query
+             # For Google, we need to find the place ID for a direct lookup
+             match = re.search(r'ChIJ[a-zA-Z0-9_-]+', url)
+             if match: return match.group(0)
     except Exception:
         pass
     return "hotel"
 
 def scrape_single_url(url: str, api_key: str):
-    """Scrapes a single hotel URL using SerpApi."""
+    """Scrapes a single hotel URL using the Google Maps engine for reliability."""
     source = get_source_from_url(url)
-    hotel_name = extract_hotel_name_from_url(url)
+    query_term = extract_hotel_name_from_url(url)
     
-    if source == "Unknown" or not hotel_name:
-        logging.warning(f"Could not determine source or hotel name for URL: {url}")
+    if source == "Unknown" or not query_term:
+        logging.warning(f"Could not determine source or query term for URL: {url}")
         return None
 
     try:
-        # --- MORE SPECIFIC SEARCH QUERY ---
-        # For non-Google URLs, we make the query more specific to improve matching.
-        search_query = hotel_name
-        if source != "Google Reviews":
-            search_query = f"{hotel_name} Chennai"
-        
+        search_query = f"{query_term} Chennai"
         logging.info(f"Scraping '{search_query}' for source: {source}")
         
+        # --- FINAL SOLUTION: Use the google_maps engine for all searches ---
         params = {
             "api_key": api_key,
-            "engine": "google_hotels",
+            "engine": "google_maps",
             "q": search_query,
             "hl": "en",
             "gl": "in"
         }
-        if source == "Google Reviews":
-             params["engine"] = "google_maps_reviews"
 
         search = GoogleSearch(params)
         results = search.get_dict()
 
-        # --- Data Standardization ---
-        if source == "Google Reviews":
-            reviews_results = results.get("reviews", [])
-            if not reviews_results: 
-                logging.warning(f"No Google reviews found for '{search_query}'")
-                return None
-            total_reviews = results.get("place_info", {}).get("reviews", 0)
-            avg_rating = results.get("place_info", {}).get("rating", 0)
-            return {
-                "source": source, "rating": avg_rating, "count": total_reviews,
-                "distribution": results.get("rating_distribution", {}),
-                "reviews": reviews_results[:5]
-            }
-        else: # For Booking.com, TripAdvisor, etc.
-            properties = results.get("properties", [])
-            if not properties:
-                logging.warning(f"SerpApi found no properties for '{search_query}' from {source}")
-                return None
-            hotel = properties[0]
-            # Get recent reviews from the 'user_reviews' section
-            user_reviews = hotel.get("user_reviews", {}).get("reviews", [])
-            return {
-                "source": source, "rating": hotel.get("overall_rating"), "count": hotel.get("reviews"),
-                "distribution": hotel.get("rating_distribution", {}),
-                "reviews": user_reviews[:5]
-            }
+        # --- Standardize data from the google_maps response ---
+        place_results = results.get("place_results", {})
+        if not place_results:
+            logging.warning(f"SerpApi found no place_results for '{search_query}'")
+            return None
+
+        # Extract the most recent reviews
+        user_reviews = results.get("reviews", [])
+        
+        return {
+            "source": source,
+            "rating": place_results.get("rating"),
+            "count": place_results.get("reviews"),
+            "distribution": results.get("rating_distribution", {}),
+            "reviews": user_reviews[:5]
+        }
     except Exception as e:
-        logging.error(f"Failed to scrape {url}: {e}")
+        logging.error(f"Failed to scrape {url}: {e}", exc_info=True)
         return None
 
 def save_to_sheets(all_reviews_data: List[dict]):
@@ -161,3 +148,4 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 @app.get("/")
 def read_root():
     return {"status": "Hotel Review Aggregator is running!"}
+
