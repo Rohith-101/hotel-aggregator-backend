@@ -43,13 +43,12 @@ def extract_query_term_from_url(url: str) -> str:
         if "booking.com" in url:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
             if match: return match.group(1).replace('-', ' ')
-        # Correctly extract the Google Place ID (starts with ChIJ)
         if "google.com" in url:
              match = re.search(r'(ChIJ[a-zA-Z0-9_-]+)', url)
              if match: return match.group(0)
     except Exception:
         pass
-    return "hotel" # Fallback
+    return "hotel"
 
 def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
     """Scrapes a single hotel URL using the Google Maps engine for reliability."""
@@ -61,7 +60,6 @@ def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
         return {}
 
     try:
-        # For non-Google sources, add the city name to improve search accuracy
         search_query = f"{query_term} Chennai" if source != "Google Reviews" else query_term
         logging.info(f"Scraping '{search_query}' for source: {source}")
         
@@ -78,15 +76,20 @@ def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
             logging.warning(f"SerpApi found no place_results for '{search_query}'")
             return {}
 
-        # Extract recent reviews from multiple possible locations in the API response
-        user_reviews = results.get("reviews") or place_results.get("user_reviews", {}).get("reviews") or []
+        # --- DETAILED DATA EXTRACTION ---
+        user_reviews = results.get("reviews", [])
+        review_snippets = [f'"{r.get("snippet", "")}"' for r in user_reviews[:3]]
         
         return {
+            "name": place_results.get("title", "N/A"),
             "source": source,
             "rating": place_results.get("rating"),
             "count": place_results.get("reviews"),
+            "address": place_results.get("address", "N/A"),
+            "website": place_results.get("website", "N/A"),
+            "phone": place_results.get("phone", "N/A"),
             "distribution": results.get("rating_distribution", {}),
-            "reviews": user_reviews[:5] # Return the top 5 recent reviews
+            "reviews_snippets": " | ".join(review_snippets) if review_snippets else "N/A"
         }
     except Exception as e:
         logging.error(f"Failed to scrape {url}: {e}", exc_info=True)
@@ -108,8 +111,12 @@ def save_to_sheets(all_reviews_data: List[Dict[str, Any]]):
             dist = data.get("distribution", {})
             rating_dist_str = json.dumps(dist) if dist else "{}"
             rows_to_add.append([
-                data.get("source"), data.get("rating"), data.get("count"),
-                rating_dist_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                data.get("name", "N/A"), data.get("source", "N/A"),
+                data.get("rating", "N/A"), data.get("count", 0),
+                data.get("address", "N/A"), data.get("website", "N/A"),
+                data.get("phone", "N/A"), rating_dist_str,
+                data.get("reviews_snippets", "N/A"),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ])
         
         if rows_to_add:
@@ -140,4 +147,5 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 @app.get("/")
 def read_root():
     return {"status": "Hotel Review Aggregator is running!"}
+
 
