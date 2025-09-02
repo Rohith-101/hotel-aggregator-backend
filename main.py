@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pantic import BaseModel
+from pydantic import BaseModel
 from serpapi import GoogleSearch
 from concurrent.futures import ThreadPoolExecutor
 
@@ -24,11 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Pydantic Models ---
 class ScrapeRequest(BaseModel):
     urls: List[str]
 
-# --- Helper Functions ---
 def get_source_from_url(url: str) -> str:
     """Identifies the review source from the URL."""
     if "booking.com" in url: return "Booking.com"
@@ -46,61 +44,60 @@ def extract_query_term_from_url(url: str) -> str:
             match = re.search(r'/hotel/\w{2}/(.*?)\.html', url)
             if match: return match.group(1).replace('-', ' ')
         if "google.com" in url:
-            # This looks for a Google Place ID (starts with ChIJ)
-            match = re.search(r'(ChIJ[a-zA-Z0-9_-]+)', url)
-            if match: return match.group(1)
+             match = re.search(r'(ChIJ[a-zA-Z0-9_-]+)', url)
+             if match: return match.group(0)
     except Exception:
-        return ""
-    return ""
+        pass
+    return "hotel"
 
 def scrape_single_url(url: str, api_key: str) -> Dict[str, Any]:
-    """Scrapes a single URL and returns structured data."""
+    """Scrapes a single hotel URL using the Google Maps engine for reliability."""
     source = get_source_from_url(url)
     query_term = extract_query_term_from_url(url)
-
-    if not query_term:
-        logging.warning(f"Could not extract a valid query from URL: {url}")
+    
+    if source == "Unknown" or not query_term:
+        logging.warning(f"Could not determine source or query term for URL: {url}")
         return {}
 
-    search_query = f"{query_term} Chennai" if source != "Google Reviews" else query_term
-    logging.info(f"Scraping '{search_query}' for source: {source}")
-    
-    params = {
-        "api_key": api_key,
-        "engine": "google_maps",
-        "q": search_query,
-        "hl": "en",
-        "gl": "in",
-    }
-
     try:
+        search_query = f"{query_term} Chennai" if source != "Google Reviews" else query_term
+        logging.info(f"Scraping '{search_query}' for source: {source}")
+        
+        params = {
+            "api_key": api_key, "engine": "google_maps",
+            "q": search_query, "hl": "en", "gl": "in"
+        }
+
         search = GoogleSearch(params)
         results = search.get_dict()
-        
+
         place_results = results.get("place_results", {})
         if not place_results:
-            logging.warning(f"SerpApi found no place_results for '{search_query}'.")
+            logging.warning(f"SerpApi found no place_results for '{search_query}'")
             return {}
 
-        review_snippets = [review.get('snippet', '') for review in place_results.get('reviews', []) if review.get('snippet')]
-
+        user_reviews = results.get("reviews") or place_results.get("user_reviews", {}).get("reviews") or []
+        rating_distribution = results.get("rating_distribution") or place_results.get("rating_distribution") or {}
+        
+        review_snippets = [f'"{r.get("snippet", "")}"' for r in user_reviews[:3] if r.get("snippet")]
+        
         return {
-            "name": place_results.get("title"),
+            "name": place_results.get("title", "N/A"),
             "source": source,
             "rating": place_results.get("rating"),
             "count": place_results.get("reviews"),
-            "address": place_results.get("address"),
-            "website": place_results.get("website"),
-            "phone": place_results.get("phone"),
-            "distribution": {item.get("stars"): item.get("count") for item in place_results.get("reviews_distribution", [])},
+            "address": place_results.get("address", "N/A"),
+            "website": place_results.get("website", "N/A"),
+            "phone": place_results.get("phone", "N/A"),
+            "distribution": rating_distribution,
             "reviews_snippets": " | ".join(review_snippets) if review_snippets else "N/A"
         }
     except Exception as e:
-        logging.error(f"Failed to scrape '{search_query}': {e}")
+        logging.error(f"Failed to scrape {url}: {e}", exc_info=True)
         return {}
 
-def save_to_sheets(all_data: List[Dict[str, Any]]):
-    """Saves the scraped data to a Google Sheet."""
+def save_to_sheets(all_reviews_data: List[Dict[str, Any]]):
+    """Saves the aggregated data to Google Sheets."""
     try:
         SHEET_NAME = os.environ["SHEET_NAME"]
         google_creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
@@ -111,8 +108,9 @@ def save_to_sheets(all_data: List[Dict[str, Any]]):
         worksheet = spreadsheet.worksheet("AggregatedData")
         
         rows_to_add = []
-        for data in all_data:
-            rating_dist_str = json.dumps(data.get("distribution", {}))
+        for data in all_reviews_data:
+            dist = data.get("distribution", {})
+            rating_dist_str = json.dumps(dist) if dist else "{}"
             rows_to_add.append([
                 data.get("name", "N/A"), data.get("source", "N/A"),
                 data.get("rating", "N/A"), data.get("count", 0),
@@ -128,7 +126,6 @@ def save_to_sheets(all_data: List[Dict[str, Any]]):
     except Exception as e:
         logging.error(f"Failed to write to Google Sheets: {e}")
 
-# --- API Endpoints ---
 @app.post("/scrape-reviews")
 async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: BackgroundTasks):
     api_key = os.environ.get("SERPAPI_KEY")
@@ -143,9 +140,6 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
             if result:
                 scraped_results.append(result)
     
-    if not scraped_results and request.urls:
-        return {"error": "Failed to scrape any of the provided URLs. Check server logs for details."}
-    
     if scraped_results:
         background_tasks.add_task(save_to_sheets, scraped_results)
 
@@ -153,4 +147,4 @@ async def scrape_reviews_endpoint(request: ScrapeRequest, background_tasks: Back
 
 @app.get("/")
 def read_root():
-    return {"status": "Review Aggregator Backend is running!"}
+    return {"status": "Hotel Review Aggregator is running!"}
